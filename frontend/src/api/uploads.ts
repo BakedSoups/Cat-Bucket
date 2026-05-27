@@ -1,6 +1,6 @@
 import type { CsvDetail, UploadResponse, UploadSummary } from '../types'
 
-export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
 
 export async function listCsvUploads() {
   const response = await fetch(`${apiBaseUrl}/api/uploads/csv`)

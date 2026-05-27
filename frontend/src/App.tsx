@@ -7,6 +7,9 @@ import { UploadsScreen } from './screens/UploadsScreen'
 import type { LoadState, UploadSummary, View } from './types'
 import './App.css'
 
+import cat_icon from './assets/cat-bucket.png' 
+
+
 function App() {
   const [view, setView] = useState<View>({ name: 'dashboard' })
   const [uploads, setUploads] = useState<UploadSummary[]>([])
@@ -56,7 +59,10 @@ function App() {
   return (
     <main className="dashboard">
       <aside className="sidebar" aria-label="Main navigation">
-        <div className="brand">Cat Bucket</div>
+        <div className='brand-row'> 
+          <div className="brand">Cat Bucket</div>
+          <img className="cat_icon" src={cat_icon} alt="Sitting character" />
+        </div>
         <nav>
           <button
             className={`nav-item ${view.name === 'dashboard' ? 'active' : ''}`}

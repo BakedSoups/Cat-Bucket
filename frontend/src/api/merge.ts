@@ -1,4 +1,4 @@
-import type { MergeResponse } from '../types'
+import type { DuplicateColumnResponse, MergeResponse, SelectedCsvColumn } from '../types'
 import { apiBaseUrl } from './uploads'
 
 export async function mergeCsvUploads(filenames: string[]) {
@@ -16,4 +16,21 @@ export async function mergeCsvUploads(filenames: string[]) {
   }
 
   return (await response.json()) as MergeResponse
+}
+
+export async function findDuplicateColumns(columns: SelectedCsvColumn[]) {
+  const response = await fetch(`${apiBaseUrl}/api/merge/find-duplicates`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ columns }),
+  })
+
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail ?? 'Could not find duplicates.')
+  }
+
+  return (await response.json()) as DuplicateColumnResponse
 }

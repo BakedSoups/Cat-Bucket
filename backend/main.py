@@ -27,6 +27,16 @@ class MergeCsvRequest(BaseModel):
     filenames: list[str]
 
 
+class SelectedColumn(BaseModel):
+    filename: str
+    column: str
+    values: list[str]
+
+
+class DuplicateColumnsRequest(BaseModel):
+    columns: list[SelectedColumn]
+
+
 def parse_csv(raw_content: bytes) -> tuple[list[str], list[dict[str, str]]]:
     try:
         text = raw_content.decode("utf-8-sig")
@@ -131,3 +141,65 @@ def merge_csv_uploads(request: MergeCsvRequest) -> dict[str, object]:
         "selected_filenames": request.filenames,
         "files": files,
     }
+
+
+@app.post("/api/merge/find-duplicates")
+def find_duplicate_columns(request: DuplicateColumnsRequest) -> dict[str, object]:
+    if not request.columns:
+        raise HTTPException(status_code=400, detail="Select at least one column.")
+
+    source_value_map = {}
+
+    for selected in request.columns:
+        get_upload_path(selected.filename)
+        values = {value.strip() for value in selected.values if value and value.strip()}
+        source_value_map[(selected.filename, selected.column)] = values
+
+    matches = []
+
+    for upload_path in sorted(UPLOAD_DIR.glob("*.csv")):
+        columns, rows = parse_csv(upload_path.read_bytes())
+
+        for column in columns:
+            column_values = {
+                row.get(column, "").strip()
+                for row in rows
+                if row.get(column, "").strip()
+            }
+
+            matched_sources = []
+            duplicate_values = set()
+
+            for source_key, source_values in source_value_map.items():
+                source_filename, source_column = source_key
+
+                if upload_path.name == source_filename and column == source_column:
+                    continue
+
+                overlap = source_values.intersection(column_values)
+
+                if overlap:
+                    duplicate_values.update(overlap)
+                    matched_sources.append(
+                        {
+                            "filename": source_filename,
+                            "column": source_column,
+                        }
+                    )
+
+            if duplicate_values:
+                matches.append(
+                    {
+                        "filename": upload_path.name,
+                        "column": column,
+                        "duplicateValues": sorted(duplicate_values),
+                        "duplicateCount": len(duplicate_values),
+                        "matchedSources": matched_sources,
+                    }
+                )
+
+    return {
+        "sources": [selected.model_dump() for selected in request.columns],
+        "matches": matches,
+    }
+

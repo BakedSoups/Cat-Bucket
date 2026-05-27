@@ -33,3 +33,24 @@ export type MergeResponse = {
   files: CsvDetail[]
   selected_filenames: string[]
 }
+
+export type SelectedCsvColumn = {
+  filename: string
+  column: string
+  values: string[]
+}
+
+export type DuplicateColumnResponse = {
+  sources: SelectedCsvColumn[]
+  matches: Array<{
+    filename: string
+    column: string
+    duplicateValues: string[]
+    duplicateCount: number
+    matchedSources: Array<{
+      filename: string
+      column: string
+    }>
+  }>
+}
+
