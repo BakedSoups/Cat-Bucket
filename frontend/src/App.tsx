@@ -57,8 +57,9 @@ function App() {
   }
   
   return (
-    <main className="dashboard">
-      <aside className="sidebar" aria-label="Main navigation">
+    <main className={`dashboard ${view.name === 'merge' ? 'merge-focused' : ''}`}>
+      {view.name !== 'merge' && (
+        <aside className="sidebar" aria-label="Main navigation">
         <div className='brand-row'> 
           <div className="brand">Cat Bucket</div>
           <img className="cat_icon" src={cat_icon} alt="Sitting character" />
@@ -72,7 +73,7 @@ function App() {
             Dashboard
           </button>
           <button
-            className={`nav-item ${view.name === 'uploads' || view.name === 'csv-detail' || view.name === 'merge' ? 'active' : ''}`}
+            className={`nav-item ${view.name === 'uploads' || view.name === 'csv-detail' ? 'active' : ''}`}
             type="button"
             onClick={() => setView({ name: 'uploads' })}
           >
@@ -88,7 +89,8 @@ function App() {
           </button>
 
         </nav>
-      </aside>
+        </aside>
+      )}
 
       <section className="workspace">
         <header className="topbar">

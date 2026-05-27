@@ -6,6 +6,14 @@
   color: #172033;
 }
 
+.dashboard.merge-focused {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard.merge-focused .workspace {
+  padding: 24px;
+}
+
 .sidebar {
   border-right: 1px solid #dde2ea;
   background: #ffffff;
@@ -454,6 +462,29 @@ tbody tr:last-child td {
 .sheet-table-scroll table {
   min-width: 100%;
   width: max-content;
+}
+
+.sheet-table-scroll th,
+.sheet-table-scroll td {
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.hovered-column {
+  background: #eef6ff;
+}
+
+.selected-column-cell {
+  background: #dceeff;
+  color: #0b4fb3;
+}
+
+.hovered-column.selected-column-cell {
+  background: #c7e2ff;
+}
+
+.hovered-column .column-select,
+.selected-column-cell .column-select {
+  color: #0b66d8;
 }
 
 .column-select {

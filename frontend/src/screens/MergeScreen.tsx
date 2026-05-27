@@ -13,6 +13,11 @@ type MergeScreenProps = {
   onBack: () => void
 }
 
+type HoveredColumn = {
+  filename: string
+  column: string
+}
+
 export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const [mergeState, setMergeState] = useState<LoadState>('loading')
   const [mergeResult, setMergeResult] = useState<MergeResponse | null>(null)
@@ -20,6 +25,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const [duplicateResult, setDuplicateResult] = useState<DuplicateColumnResponse | null>(null)
   const [duplicateState, setDuplicateState] = useState<LoadState>('idle')
   const [errorMessage, setErrorMessage] = useState('')
+  const [hoveredColumn, setHoveredColumn] = useState<HoveredColumn | null>(null)
 
   useEffect(() => {
     async function startMerge() {
@@ -27,6 +33,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
       setErrorMessage('')
       setSelectedColumns([])
       setDuplicateResult(null)
+      setHoveredColumn(null)
 
       try {
         const data = await mergeCsvUploads(filenames)
@@ -40,6 +47,22 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
 
     void startMerge()
   }, [filenames])
+
+  function isColumnHovered(file: CsvDetail, column: string) {
+    return hoveredColumn?.filename === file.filename && hoveredColumn.column === column
+  }
+
+  function isColumnSelected(file: CsvDetail, column: string) {
+    return selectedColumns.some(
+      (selected) => selected.filename === file.filename && selected.column === column,
+    )
+  }
+
+  function getColumnClassName(isHovered: boolean, isSelected: boolean) {
+    return [isHovered ? 'hovered-column' : '', isSelected ? 'selected-column-cell' : '']
+      .filter(Boolean)
+      .join(' ')
+  }
 
   function toggleColumn(file: CsvDetail, column: string) {
     setDuplicateResult(null)
@@ -132,13 +155,18 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                       <thead>
                         <tr>
                           {visibleColumns.map((column) => {
-                            const isSelected = selectedColumns.some(
-                              (selected) =>
-                                selected.filename === file.filename && selected.column === column,
-                            )
+                            const isSelected = isColumnSelected(file, column)
+                            const isHovered = isColumnHovered(file, column)
 
                             return (
-                              <th key={column}>
+                              <th
+                                className={getColumnClassName(isHovered, isSelected)}
+                                key={column}
+                                onMouseEnter={() =>
+                                  setHoveredColumn({ filename: file.filename, column })
+                                }
+                                onMouseLeave={() => setHoveredColumn(null)}
+                              >
                                 <button
                                   className={
                                     isSelected
@@ -158,9 +186,23 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                       <tbody>
                         {file.rows.map((row, rowIndex) => (
                           <tr key={`${file.filename}-${rowIndex}`}>
-                            {visibleColumns.map((column) => (
-                              <td key={column}>{row[column]}</td>
-                            ))}
+                            {visibleColumns.map((column) => {
+                              const isSelected = isColumnSelected(file, column)
+                              const isHovered = isColumnHovered(file, column)
+
+                              return (
+                                <td
+                                  className={getColumnClassName(isHovered, isSelected)}
+                                  key={column}
+                                  onMouseEnter={() =>
+                                    setHoveredColumn({ filename: file.filename, column })
+                                  }
+                                  onMouseLeave={() => setHoveredColumn(null)}
+                                >
+                                  {row[column]}
+                                </td>
+                              )
+                            })}
                           </tr>
                         ))}
                       </tbody>
