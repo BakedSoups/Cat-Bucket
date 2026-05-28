@@ -40,8 +40,46 @@ export type SelectedCsvColumn = {
   values: string[]
 }
 
+export type TagOccurrence = {
+  filename: string
+  column: string
+  rowIndex: number
+  value: string
+}
+
+export type DuplicateTagGroup = {
+  canonicalTag: string
+  normalizedTag: string
+  values: string[]
+  duplicateCount: number
+  occurrences: TagOccurrence[]
+}
+
+export type FuzzyTagGroup = {
+  suggestedTag: string
+  values: string[]
+  score: number
+  occurrenceCount: number
+  occurrences: TagOccurrence[]
+}
+
+export type UnificationCandidate = {
+  canonicalTag: string
+  values: string[]
+  exactMatchCount: number
+  fuzzyMatchCount: number
+  llmMatchCount: number
+  totalMatchCount: number
+  score: number
+  llmStatus: string
+  exactOccurrences: TagOccurrence[]
+  fuzzyOccurrences: TagOccurrence[]
+  llmOccurrences: TagOccurrence[]
+}
+
 export type DuplicateColumnResponse = {
   sources: SelectedCsvColumn[]
+  selectedColumnValues: SelectedCsvColumn[]
   matches: Array<{
     filename: string
     column: string
@@ -52,5 +90,18 @@ export type DuplicateColumnResponse = {
       column: string
     }>
   }>
+  duplicateTagGroups: DuplicateTagGroup[]
+  fuzzyTagGroups: FuzzyTagGroup[]
+  unificationCandidates: UnificationCandidate[]
+  summary: {
+    tagCount: number
+    uniqueTagCount: number
+    duplicateGroupCount: number
+    fuzzyGroupCount: number
+    fuzzyPreviewLimit: number
+    llmCandidateCount: number
+    llmMatchCount: number
+    llmStatus: string
+  }
 }
 

@@ -403,6 +403,7 @@ td {
   padding: 10px 12px;
   text-align: left;
   font-size: 14px;
+  scroll-margin: 96px;
   vertical-align: top;
 }
 
@@ -478,8 +479,19 @@ tbody tr:last-child td {
   color: #0b4fb3;
 }
 
+.focused-match-cell {
+  background: #fff4cc;
+  box-shadow: inset 0 0 0 2px #d99a00;
+  color: #533f04;
+}
+
 .hovered-column.selected-column-cell {
   background: #c7e2ff;
+}
+
+.hovered-column.focused-match-cell,
+.selected-column-cell.focused-match-cell {
+  background: #ffe8a3;
 }
 
 .hovered-column .column-select,
@@ -510,18 +522,132 @@ tbody tr:last-child td {
   margin-top: 18px;
 }
 
+.duplicate-results-heading {
+  align-items: end;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.duplicate-results-heading h3,
+.duplicate-results-heading p {
+  margin: 0;
+}
+
 .duplicate-results article {
-  align-items: center;
+  align-items: flex-start;
   border: 1px solid #dde2ea;
   border-radius: 8px;
   display: flex;
-  gap: 12px;
+  gap: 16px;
   justify-content: space-between;
   padding: 12px 14px;
 }
 
-.duplicate-results span {
+.duplicate-result-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.candidate-heading-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.compact-button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.candidate-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.candidate-counts span {
+  background: #f3f8f5;
+  border: 1px solid #cfe0d5;
+  border-radius: 999px;
+  color: #24543a;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 5px 9px;
+}
+
+.occurrence-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.occurrence-list li {
+  display: grid;
+  gap: 2px;
+}
+
+.occurrence-list button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 2px;
+  padding: 0;
+  text-align: left;
+}
+
+.occurrence-list button:hover span {
+  color: #0b66d8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.occurrence-list span {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.occurrence-list small {
   color: #667085;
+  overflow-wrap: anywhere;
+}
+
+.selected-source-summary {
+  border: 1px solid #dde2ea;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.selected-source-summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selected-source-summary span {
+  background: #edf2f7;
+  border-radius: 999px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
+.duplicate-results article > span {
+  color: #667085;
+  flex: 0 0 auto;
   font-size: 14px;
 }
 
@@ -560,6 +686,8 @@ tbody tr:last-child td {
 
   .merge-toolbar,
   .sheet-preview-heading,
+  .duplicate-results-heading,
+  .candidate-heading-row,
   .duplicate-results article {
     align-items: stretch;
     flex-direction: column;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { findDuplicateColumns, mergeCsvUploads } from '../api/merge'
 import type {
   CsvDetail,
@@ -6,6 +6,8 @@ import type {
   LoadState,
   MergeResponse,
   SelectedCsvColumn,
+  TagOccurrence,
+  UnificationCandidate,
 } from '../types'
 
 type MergeScreenProps = {
@@ -18,6 +20,8 @@ type HoveredColumn = {
   column: string
 }
 
+const OCCURRENCE_PREVIEW_LIMIT = 6
+
 export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const [mergeState, setMergeState] = useState<LoadState>('loading')
   const [mergeResult, setMergeResult] = useState<MergeResponse | null>(null)
@@ -26,6 +30,8 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const [duplicateState, setDuplicateState] = useState<LoadState>('idle')
   const [errorMessage, setErrorMessage] = useState('')
   const [hoveredColumn, setHoveredColumn] = useState<HoveredColumn | null>(null)
+  const [focusedCellKeys, setFocusedCellKeys] = useState<string[]>([])
+  const cellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
 
   useEffect(() => {
     async function startMerge() {
@@ -34,6 +40,8 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
       setSelectedColumns([])
       setDuplicateResult(null)
       setHoveredColumn(null)
+      setFocusedCellKeys([])
+      cellRefs.current = {}
 
       try {
         const data = await mergeCsvUploads(filenames)
@@ -48,6 +56,14 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     void startMerge()
   }, [filenames])
 
+  function getCellKey(filename: string, column: string, rowIndex: number) {
+    return `${filename}::${column}::${rowIndex}`
+  }
+
+  function getOccurrenceKey(occurrence: TagOccurrence) {
+    return getCellKey(occurrence.filename, occurrence.column, occurrence.rowIndex)
+  }
+
   function isColumnHovered(file: CsvDetail, column: string) {
     return hoveredColumn?.filename === file.filename && hoveredColumn.column === column
   }
@@ -58,14 +74,23 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     )
   }
 
-  function getColumnClassName(isHovered: boolean, isSelected: boolean) {
-    return [isHovered ? 'hovered-column' : '', isSelected ? 'selected-column-cell' : '']
+  function isCellFocused(file: CsvDetail, column: string, rowIndex: number) {
+    return focusedCellKeys.includes(getCellKey(file.filename, column, rowIndex))
+  }
+
+  function getColumnClassName(isHovered: boolean, isSelected: boolean, isFocused = false) {
+    return [
+      isHovered ? 'hovered-column' : '',
+      isSelected ? 'selected-column-cell' : '',
+      isFocused ? 'focused-match-cell' : '',
+    ]
       .filter(Boolean)
       .join(' ')
   }
 
   function toggleColumn(file: CsvDetail, column: string) {
     setDuplicateResult(null)
+    setFocusedCellKeys([])
     setSelectedColumns((current) => {
       const exists = current.some(
         (selected) => selected.filename === file.filename && selected.column === column,
@@ -88,11 +113,56 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     })
   }
 
+  function formatOccurrenceLocation(occurrence: TagOccurrence) {
+    return `${occurrence.filename} / ${occurrence.column} / row ${occurrence.rowIndex + 1}`
+  }
+
+  function focusOccurrences(occurrences: TagOccurrence[]) {
+    const keys = occurrences.map(getOccurrenceKey)
+    setFocusedCellKeys(keys)
+
+    const firstCell = cellRefs.current[keys[0]]
+    firstCell?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+  }
+
+  function getCandidateOccurrences(candidate: UnificationCandidate) {
+    return [
+      ...candidate.exactOccurrences,
+      ...candidate.fuzzyOccurrences,
+      ...candidate.llmOccurrences,
+    ]
+  }
+
+  function renderOccurrencePreview(occurrences: TagOccurrence[]) {
+    const visibleOccurrences = occurrences.slice(0, OCCURRENCE_PREVIEW_LIMIT)
+    const remainingCount = occurrences.length - visibleOccurrences.length
+
+    return (
+      <ul className="occurrence-list">
+        {visibleOccurrences.map((occurrence) => (
+          <li key={`${getOccurrenceKey(occurrence)}-${occurrence.value}`}>
+            <button type="button" onClick={() => focusOccurrences([occurrence])}>
+              <span>{occurrence.value}</span>
+              <small>{formatOccurrenceLocation(occurrence)}</small>
+            </button>
+          </li>
+        ))}
+        {remainingCount > 0 && (
+          <li>
+            <span>{remainingCount} more occurrence{remainingCount === 1 ? '' : 's'}</span>
+            <small>Use focus matches to highlight the full set</small>
+          </li>
+        )}
+      </ul>
+    )
+  }
+
   async function handleFindDuplicates() {
     if (selectedColumns.length === 0) return
 
     setDuplicateState('loading')
     setErrorMessage('')
+    setFocusedCellKeys([])
 
     try {
       const data = await findDuplicateColumns(selectedColumns)
@@ -130,7 +200,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
               disabled={selectedColumns.length === 0 || duplicateState === 'loading'}
               onClick={handleFindDuplicates}
             >
-              {duplicateState === 'loading' ? 'Finding...' : 'Find duplicates'}
+              {duplicateState === 'loading' ? 'Finding...' : 'Find unification candidates'}
             </button>
             <span className="muted">
               {selectedColumns.length} selected column{selectedColumns.length === 1 ? '' : 's'}
@@ -139,7 +209,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
 
           <div className="sheet-preview-grid">
             {mergeResult.files.map((file) => {
-              const visibleColumns = file.columns.slice(0, 5)
+              const visibleColumns = file.columns
 
               return (
                 <section className="sheet-preview" key={file.filename}>
@@ -189,11 +259,16 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                             {visibleColumns.map((column) => {
                               const isSelected = isColumnSelected(file, column)
                               const isHovered = isColumnHovered(file, column)
+                              const isFocused = isCellFocused(file, column, rowIndex)
+                              const cellKey = getCellKey(file.filename, column, rowIndex)
 
                               return (
                                 <td
-                                  className={getColumnClassName(isHovered, isSelected)}
+                                  className={getColumnClassName(isHovered, isSelected, isFocused)}
                                   key={column}
+                                  ref={(element) => {
+                                    cellRefs.current[cellKey] = element
+                                  }}
                                   onMouseEnter={() =>
                                     setHoveredColumn({ filename: file.filename, column })
                                   }
@@ -215,18 +290,74 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
 
           {duplicateResult && (
             <section className="duplicate-results">
-              <h3>Duplicate matches</h3>
-              {duplicateResult.matches.length === 0 && (
-                <p className="muted">No duplicate values found.</p>
+              <div className="duplicate-results-heading">
+                <div>
+                  <h3>Unification candidates</h3>
+                  <p className="muted">
+                    {duplicateResult.summary.tagCount} entries scanned across{' '}
+                    {duplicateResult.summary.uniqueTagCount} unique values.
+                  </p>
+                </div>
+                <span>
+                  {duplicateResult.unificationCandidates.length} candidates
+                </span>
+              </div>
+
+              {duplicateResult.unificationCandidates.length === 0 && (
+                <p className="muted">No unification candidates found.</p>
               )}
-              {duplicateResult.matches.map((match) => (
-                <article key={`${match.filename}-${match.column}`}>
-                  <strong>
-                    {match.filename} / {match.column}
-                  </strong>
-                  <span>{match.duplicateCount} duplicate values</span>
-                </article>
-              ))}
+
+              {duplicateResult.unificationCandidates.map((candidate) => {
+                const occurrences = getCandidateOccurrences(candidate)
+
+                return (
+                  <article key={`${candidate.canonicalTag}-${candidate.values.join('|')}`}>
+                    <div className="duplicate-result-body">
+                      <div className="candidate-heading-row">
+                        <div>
+                          <strong>{candidate.canonicalTag}</strong>
+                          <p className="muted">{candidate.values.join(', ')}</p>
+                        </div>
+                        <button
+                          className="secondary-button compact-button"
+                          type="button"
+                          onClick={() => focusOccurrences(occurrences)}
+                        >
+                          Focus matches
+                        </button>
+                      </div>
+
+                      <div className="candidate-counts" aria-label="Match counts">
+                        <span>{candidate.exactMatchCount} exact</span>
+                        <span>{candidate.fuzzyMatchCount} fuzzy</span>
+                        <span>{candidate.llmMatchCount} LLM</span>
+                      </div>
+
+                      {candidate.llmStatus !== 'ready' && (
+                        <p className="muted">Offline LLM review is not configured yet.</p>
+                      )}
+
+                      {renderOccurrencePreview(occurrences)}
+                    </div>
+                    <span>
+                      {candidate.totalMatchCount} match{candidate.totalMatchCount === 1 ? '' : 'es'}
+                    </span>
+                  </article>
+                )
+              })}
+
+              {duplicateResult.selectedColumnValues.length > 0 && (
+                <div className="selected-source-summary">
+                  <strong>Selected source columns</strong>
+                  <div>
+                    {duplicateResult.selectedColumnValues.map((source) => (
+                      <span key={`${source.filename}-${source.column}`}>
+                        {source.filename} / {source.column} ({source.values.length} rows)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
           )}
         </>
