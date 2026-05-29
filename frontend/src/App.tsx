@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { listCsvUploads } from './api/uploads'
 import { CsvDetailScreen } from './screens/CsvDetailScreen'
 import { DashboardScreen } from './screens/DashboardScreen'
+import { AnalysisScreen } from './screens/AnalysisScreen'
 import { MergeScreen } from './screens/MergeScreen'
 import { UploadsScreen } from './screens/UploadsScreen'
 import type { LoadState, UploadSummary, View } from './types'
@@ -122,6 +123,8 @@ function App() {
         {view.name === 'merge' && (
           <MergeScreen filenames={view.filenames} onBack={() => setView({ name: 'uploads' })} />
         )}
+
+        {view.name === 'analysis' && <AnalysisScreen uploads={uploads} />}
       </section>
     </main>
   )

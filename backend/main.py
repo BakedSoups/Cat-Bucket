@@ -77,6 +77,18 @@ class CategorizeRequest(BaseModel):
     contextColumns: list[SelectedColumn] = []
 
 
+class CsvCellUpdate(BaseModel):
+    filename: str
+    column: str
+    rowIndex: int
+    value: str
+    originalValue: str | None = None
+
+
+class SaveMergeChangesRequest(BaseModel):
+    updates: list[CsvCellUpdate]
+
+
 def parse_csv(raw_content: bytes) -> tuple[list[str], list[dict[str, str]]]:
     # Convert raw file bytes into:
     # 1. a list of column names from the header row
@@ -105,6 +117,29 @@ def get_upload_path(filename: str) -> Path:
         raise HTTPException(status_code=404, detail="CSV upload not found.")
 
     return upload_path
+
+
+def write_csv(upload_path: Path, columns: list[str], rows: list[dict[str, str]]) -> None:
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    upload_path.write_text(output.getvalue(), encoding="utf-8", newline="")
+
+
+def replace_token_value(cell_value: str, original_value: str, replacement_value: str) -> str:
+    if not original_value or cell_value.strip() == original_value:
+        return replacement_value
+
+    parts = re.split(r"([,;|\n]+)", cell_value)
+    changed = False
+
+    for index, part in enumerate(parts):
+        if normalize_tag(part) == normalize_tag(original_value):
+            parts[index] = replacement_value
+            changed = True
+
+    return "".join(parts) if changed else replacement_value
 
 
 def read_selected_column_values(selected: SelectedColumn) -> dict[str, object]:
@@ -366,35 +401,6 @@ def build_categorization_rows(
     return rows
 
 
-def heuristic_category_for_row(categories: list[str], row: dict[str, object]) -> tuple[str, float, str]:
-    haystack_parts = [str(row["targetValue"])]
-    context = row["context"]
-
-    if isinstance(context, dict):
-        haystack_parts.extend(str(value) for value in context.values())
-
-    haystack = normalize_tag(" ".join(haystack_parts))
-    best_category = categories[0] if categories else ""
-    best_score = 0.0
-
-    for category in categories:
-        category_tokens = set(normalize_tag(category).split())
-
-        if not category_tokens:
-            continue
-
-        score = sum(1 for token in category_tokens if token in haystack) / len(category_tokens)
-
-        if score > best_score:
-            best_score = score
-            best_category = category
-
-    if best_score > 0:
-        return best_category, min(0.55 + best_score * 0.35, 0.9), "Keyword overlap fallback."
-
-    return best_category, 0.25, "Local LLM unavailable; defaulted to the first available category."
-
-
 def build_categorization_prompt(categories: list[str], rows: list[dict[str, object]]) -> str:
     payload = {
         "categories": categories[:CATEGORY_SAMPLE_LIMIT],
@@ -403,13 +409,14 @@ def build_categorization_prompt(categories: list[str], rows: list[dict[str, obje
             "For each row, choose exactly one category from categories. "
             "Return only JSON in this shape: "
             "{\"suggestions\":[{\"rowIndex\":0,\"suggestedCategory\":\"...\","
-            "\"confidence\":0.0,\"reason\":\"short reason\"}]}"
+            "\"confidence\":0.0,\"reason\":\"short reason\"}],"
+            "\"questions\":[\"short question for the user when more context is needed\"]}"
         ),
     }
     return json.dumps(payload, ensure_ascii=True)
 
 
-def call_ollama_categorizer(categories: list[str], rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], str]:
+def call_ollama_categorizer(categories: list[str], rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[str], str]:
     body = json.dumps(
         {
             "model": OLLAMA_MODEL,
@@ -429,26 +436,50 @@ def call_ollama_categorizer(categories: list[str], rows: list[dict[str, object]]
         with request.urlopen(ollama_request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, error.URLError, json.JSONDecodeError):
-        return [], "offline_model_unavailable"
+        return [], [], "offline_model_unavailable"
 
     try:
         parsed_response = json.loads(str(payload.get("response", "{}")))
     except json.JSONDecodeError:
-        return [], "offline_model_invalid_response"
+        return [], [], "offline_model_invalid_response"
 
     suggestions = parsed_response.get("suggestions")
 
     if not isinstance(suggestions, list):
-        return [], "offline_model_invalid_response"
+        return [], [], "offline_model_invalid_response"
 
     return suggestions, "ready"
+
+
+def build_default_categorization_questions(
+    category_column: dict[str, object],
+    target_column: dict[str, object],
+    context_columns: list[dict[str, object]],
+) -> list[str]:
+    context_names = ", ".join(str(column["column"]) for column in context_columns) or "no context columns"
+    return [
+        f"What business rule should map {target_column['column']} values into {category_column['column']} categories?",
+        f"When {context_names} conflict, which field should be trusted first?",
+        "Are there categories that should only be used with explicit approval?",
+    ]
 
 
 def build_category_suggestions(
     categories: list[str],
     rows: list[dict[str, object]],
-) -> tuple[list[dict[str, object]], str]:
-    llm_suggestions, llm_status = call_ollama_categorizer(categories, rows)
+    category_column: dict[str, object],
+    target_column: dict[str, object],
+    context_columns: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], str, list[str]]:
+    llm_suggestions, llm_questions, llm_status = call_ollama_categorizer(categories, rows)
+
+    if llm_status != "ready":
+        return [], llm_status, build_default_categorization_questions(
+            category_column,
+            target_column,
+            context_columns,
+        )
+
     suggestions_by_row = {
         int(suggestion["rowIndex"]): suggestion
         for suggestion in llm_suggestions
@@ -460,14 +491,8 @@ def build_category_suggestions(
         row_index = int(row["rowIndex"])
         llm_suggestion = suggestions_by_row.get(row_index)
 
-        if llm_suggestion and str(llm_suggestion.get("suggestedCategory", "")) in categories:
-            suggested_category = str(llm_suggestion["suggestedCategory"])
-            confidence = float(llm_suggestion.get("confidence", 0.5))
-            reason = str(llm_suggestion.get("reason", "Local LLM suggestion."))
-            method = "offline_llm"
-        else:
-            suggested_category, confidence, reason = heuristic_category_for_row(categories, row)
-            method = "heuristic"
+        if not llm_suggestion or str(llm_suggestion.get("suggestedCategory", "")) not in categories:
+            continue
 
         suggestions.append(
             {
@@ -475,14 +500,14 @@ def build_category_suggestions(
                 "rowIndex": row_index,
                 "targetValue": row["targetValue"],
                 "context": row["context"],
-                "suggestedCategory": suggested_category,
-                "confidence": round(max(0, min(confidence, 1)), 2),
-                "reason": reason,
-                "method": method,
+                "suggestedCategory": str(llm_suggestion["suggestedCategory"]),
+                "confidence": round(max(0, min(float(llm_suggestion.get("confidence", 0.5)), 1)), 2),
+                "reason": str(llm_suggestion.get("reason", "Local LLM suggestion.")),
+                "method": "offline_llm",
             }
         )
 
-    return suggestions, llm_status
+    return suggestions, llm_status, llm_questions
 
 
 def build_unification_candidates(
@@ -698,7 +723,13 @@ def categorize_rows(request_body: CategorizeRequest) -> dict[str, object]:
     if not rows:
         raise HTTPException(status_code=400, detail="No rows were available to categorize.")
 
-    suggestions, llm_status = build_category_suggestions(categories, rows)
+    suggestions, llm_status, questions = build_category_suggestions(
+        categories,
+        rows,
+        category_column,
+        target_column,
+        context_columns,
+    )
 
     return {
         "categoryColumn": category_column,
@@ -706,6 +737,7 @@ def categorize_rows(request_body: CategorizeRequest) -> dict[str, object]:
         "contextColumns": context_columns,
         "categories": categories,
         "suggestions": suggestions,
+        "questions": questions,
         "summary": {
             "categoryCount": len(categories),
             "rowCount": len(rows),
@@ -714,3 +746,33 @@ def categorize_rows(request_body: CategorizeRequest) -> dict[str, object]:
             "ollamaModel": OLLAMA_MODEL,
         },
     }
+
+
+@app.post("/api/merge/save-changes")
+def save_merge_changes(request_body: SaveMergeChangesRequest) -> dict[str, object]:
+    updates_by_file: dict[str, list[CsvCellUpdate]] = {}
+
+    for update in request_body.updates:
+        updates_by_file.setdefault(Path(unquote(update.filename)).name, []).append(update)
+
+    saved_updates = 0
+
+    for filename, updates in updates_by_file.items():
+        upload_path = get_upload_path(filename)
+        columns, rows = parse_csv(upload_path.read_bytes())
+
+        for update in updates:
+            if update.column not in columns or update.rowIndex < 0 or update.rowIndex >= len(rows):
+                continue
+
+            current_value = rows[update.rowIndex].get(update.column, "")
+            rows[update.rowIndex][update.column] = replace_token_value(
+                current_value,
+                update.originalValue or current_value,
+                update.value,
+            )
+            saved_updates += 1
+
+        write_csv(upload_path, columns, rows)
+
+    return {"savedUpdateCount": saved_updates}

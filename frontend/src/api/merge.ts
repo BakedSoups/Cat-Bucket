@@ -1,4 +1,4 @@
-import type { CategorizeRequestPayload, CategorizeResponse, DuplicateColumnResponse, MergeResponse, SelectedCsvColumn } from '../types'
+import type { CategorizeRequestPayload, CategorizeResponse, DuplicateColumnResponse, MergeResponse, SaveMergeChangesPayload, SelectedCsvColumn } from '../types'
 import { apiBaseUrl } from './uploads'
 
 export async function mergeCsvUploads(filenames: string[]) {
@@ -51,4 +51,22 @@ export async function categorizeRows(payload: CategorizeRequestPayload) {
   }
 
   return (await response.json()) as CategorizeResponse
+}
+
+
+export async function saveMergeChanges(payload: SaveMergeChangesPayload) {
+  const response = await fetch(`${apiBaseUrl}/api/merge/save-changes`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail ?? 'Could not save changes.')
+  }
+
+  return (await response.json()) as { savedUpdateCount: number }
 }

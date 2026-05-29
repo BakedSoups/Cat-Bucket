@@ -129,6 +129,7 @@ export type CategorizeResponse = {
   contextColumns: SelectedCsvColumn[]
   categories: string[]
   suggestions: CategorySuggestion[]
+  questions: string[]
   summary: {
     categoryCount: number
     rowCount: number
@@ -136,4 +137,16 @@ export type CategorizeResponse = {
     llmStatus: string
     ollamaModel: string
   }
+}
+
+export type CsvCellUpdate = {
+  filename: string
+  column: string
+  rowIndex: number
+  value: string
+  originalValue?: string
+}
+
+export type SaveMergeChangesPayload = {
+  updates: CsvCellUpdate[]
 }

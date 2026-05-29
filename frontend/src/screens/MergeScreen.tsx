@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { categorizeRows, findDuplicateColumns, mergeCsvUploads } from '../api/merge'
+import { categorizeRows, findDuplicateColumns, mergeCsvUploads, saveMergeChanges } from '../api/merge'
 import type {
   CategorizeResponse,
   CategorySuggestion,
@@ -7,6 +7,7 @@ import type {
   DuplicateColumnResponse,
   LoadState,
   MergeResponse,
+  CsvCellUpdate,
   SelectedCsvColumn,
   TagOccurrence,
   UnificationCandidate,
@@ -24,21 +25,28 @@ type HoveredColumn = {
 
 type ToolMode = 'unifier' | 'categorizer'
 
-const OCCURRENCE_PREVIEW_LIMIT = 6
 
 export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const [mergeState, setMergeState] = useState<LoadState>('loading')
   const [mergeResult, setMergeResult] = useState<MergeResponse | null>(null)
   const [toolMode, setToolMode] = useState<ToolMode>('unifier')
+  const [activeFilename, setActiveFilename] = useState('')
   const [selectedColumns, setSelectedColumns] = useState<SelectedCsvColumn[]>([])
   const [categorizerColumns, setCategorizerColumns] = useState<SelectedCsvColumn[]>([])
   const [duplicateResult, setDuplicateResult] = useState<DuplicateColumnResponse | null>(null)
   const [categorizeResult, setCategorizeResult] = useState<CategorizeResponse | null>(null)
   const [duplicateState, setDuplicateState] = useState<LoadState>('idle')
   const [categorizeState, setCategorizeState] = useState<LoadState>('idle')
+  const [saveState, setSaveState] = useState<LoadState>('idle')
+  const [saveMessage, setSaveMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [hoveredColumn, setHoveredColumn] = useState<HoveredColumn | null>(null)
   const [focusedCellKeys, setFocusedCellKeys] = useState<string[]>([])
+  const [approvedSuggestionKeys, setApprovedSuggestionKeys] = useState<string[]>([])
+  const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<string[]>([])
+  const [approvedCandidateKeys, setApprovedCandidateKeys] = useState<string[]>([])
+  const [dismissedCandidateKeys, setDismissedCandidateKeys] = useState<string[]>([])
+  const [expandedMethodKeys, setExpandedMethodKeys] = useState<string[]>([])
   const cellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
 
   useEffect(() => {
@@ -51,11 +59,19 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
       setCategorizeResult(null)
       setHoveredColumn(null)
       setFocusedCellKeys([])
+    setSaveMessage('')
+      setSaveMessage('')
+      setApprovedSuggestionKeys([])
+      setDismissedSuggestionKeys([])
+      setApprovedCandidateKeys([])
+      setDismissedCandidateKeys([])
+      setExpandedMethodKeys([])
       cellRefs.current = {}
 
       try {
         const data = await mergeCsvUploads(filenames)
         setMergeResult(data)
+        setActiveFilename(data.files[0]?.filename ?? '')
         setMergeState('idle')
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Could not start merge.')
@@ -129,6 +145,11 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     setCategorizeResult(null)
     setErrorMessage('')
     setFocusedCellKeys([])
+    setApprovedSuggestionKeys([])
+    setDismissedSuggestionKeys([])
+    setApprovedCandidateKeys([])
+    setDismissedCandidateKeys([])
+    setExpandedMethodKeys([])
   }
 
   function switchToolMode(nextMode: ToolMode) {
@@ -179,8 +200,22 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     const keys = occurrences.map(getOccurrenceKey)
     setFocusedCellKeys(keys)
 
-    const firstCell = cellRefs.current[keys[0]]
-    firstCell?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    if (occurrences[0]) {
+      setActiveFilename(occurrences[0].filename)
+    }
+
+    window.requestAnimationFrame(() => {
+      const firstCell = cellRefs.current[keys[0]]
+      firstCell?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    })
+  }
+
+  function getCandidateKey(candidate: UnificationCandidate) {
+    return `${candidate.canonicalTag}::${candidate.values.join('|')}`
+  }
+
+  function getSuggestionKey(suggestion: CategorySuggestion) {
+    return `${suggestion.filename}::${suggestion.rowIndex}`
   }
 
   function focusSuggestion(suggestion: CategorySuggestion) {
@@ -190,7 +225,63 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
 
     const key = getCellKey(suggestion.filename, targetColumn, suggestion.rowIndex)
     setFocusedCellKeys([key])
-    cellRefs.current[key]?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    setActiveFilename(suggestion.filename)
+    window.requestAnimationFrame(() => {
+      cellRefs.current[key]?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    })
+  }
+
+  function toggleCandidateApproval(candidate: UnificationCandidate) {
+    const key = getCandidateKey(candidate)
+    setDismissedCandidateKeys((current) => current.filter((dismissedKey) => dismissedKey !== key))
+    setApprovedCandidateKeys((current) =>
+      current.includes(key)
+        ? current.filter((approvedKey) => approvedKey !== key)
+        : [...current, key],
+    )
+  }
+
+  function toggleCandidateDismissal(candidate: UnificationCandidate) {
+    const key = getCandidateKey(candidate)
+    setApprovedCandidateKeys((current) => current.filter((approvedKey) => approvedKey !== key))
+    setDismissedCandidateKeys((current) =>
+      current.includes(key)
+        ? current.filter((dismissedKey) => dismissedKey !== key)
+        : [...current, key],
+    )
+  }
+
+  function toggleMethodExpansion(candidate: UnificationCandidate, method: string) {
+    const key = `${getCandidateKey(candidate)}::${method}`
+    setExpandedMethodKeys((current) =>
+      current.includes(key)
+        ? current.filter((expandedKey) => expandedKey !== key)
+        : [...current, key],
+    )
+  }
+
+  function isMethodExpanded(candidate: UnificationCandidate, method: string) {
+    return expandedMethodKeys.includes(`${getCandidateKey(candidate)}::${method}`)
+  }
+
+  function toggleSuggestionApproval(suggestion: CategorySuggestion) {
+    const key = getSuggestionKey(suggestion)
+    setDismissedSuggestionKeys((current) => current.filter((dismissedKey) => dismissedKey !== key))
+    setApprovedSuggestionKeys((current) =>
+      current.includes(key)
+        ? current.filter((approvedKey) => approvedKey !== key)
+        : [...current, key],
+    )
+  }
+
+  function toggleSuggestionDismissal(suggestion: CategorySuggestion) {
+    const key = getSuggestionKey(suggestion)
+    setApprovedSuggestionKeys((current) => current.filter((approvedKey) => approvedKey !== key))
+    setDismissedSuggestionKeys((current) =>
+      current.includes(key)
+        ? current.filter((dismissedKey) => dismissedKey !== key)
+        : [...current, key],
+    )
   }
 
   function getCandidateOccurrences(candidate: UnificationCandidate) {
@@ -201,28 +292,98 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     ]
   }
 
-  function renderOccurrencePreview(occurrences: TagOccurrence[]) {
-    const visibleOccurrences = occurrences.slice(0, OCCURRENCE_PREVIEW_LIMIT)
-    const remainingCount = occurrences.length - visibleOccurrences.length
+  function renderMethodOccurrences(
+    candidate: UnificationCandidate,
+    method: string,
+    label: string,
+    occurrences: TagOccurrence[],
+  ) {
+    const expanded = isMethodExpanded(candidate, method)
+    const visibleOccurrences = expanded ? occurrences : occurrences.slice(0, 3)
 
     return (
-      <ul className="occurrence-list">
-        {visibleOccurrences.map((occurrence) => (
-          <li key={`${getOccurrenceKey(occurrence)}-${occurrence.value}`}>
-            <button type="button" onClick={() => focusOccurrences([occurrence])}>
-              <span>{occurrence.value}</span>
-              <small>{formatOccurrenceLocation(occurrence)}</small>
-            </button>
-          </li>
-        ))}
-        {remainingCount > 0 && (
-          <li>
-            <span>{remainingCount} more occurrence{remainingCount === 1 ? '' : 's'}</span>
-            <small>Use focus matches to highlight the full set</small>
-          </li>
+      <details className="method-section" open={occurrences.length > 0}>
+        <summary>
+          <span>{label}</span>
+          <small>{occurrences.length} match{occurrences.length === 1 ? '' : 'es'}</small>
+        </summary>
+        {occurrences.length === 0 ? (
+          <p className="muted">No {label.toLowerCase()} matches.</p>
+        ) : (
+          <>
+            <ul className="occurrence-list">
+              {visibleOccurrences.map((occurrence) => (
+                <li key={`${getOccurrenceKey(occurrence)}-${occurrence.value}-${method}`}>
+                  <button type="button" onClick={() => focusOccurrences([occurrence])}>
+                    <span>{occurrence.value}</span>
+                    <small>{formatOccurrenceLocation(occurrence)}</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {occurrences.length > 3 && (
+              <button
+                className="text-button inline-text-button"
+                type="button"
+                onClick={() => toggleMethodExpansion(candidate, method)}
+              >
+                {expanded ? 'Show first 3' : `Show all ${occurrences.length}`}
+              </button>
+            )}
+          </>
         )}
-      </ul>
+      </details>
     )
+  }
+
+
+
+  function buildApprovedCategoryUpdates() {
+    if (!categorizeResult) return []
+
+    return categorizeResult.suggestions
+      .filter((suggestion) => approvedSuggestionKeys.includes(getSuggestionKey(suggestion)))
+      .map((suggestion) => ({
+        filename: suggestion.filename,
+        column: categorizeResult.targetColumn.column,
+        rowIndex: suggestion.rowIndex,
+        value: suggestion.suggestedCategory,
+        originalValue: suggestion.targetValue,
+      })) satisfies CsvCellUpdate[]
+  }
+
+  function buildApprovedCandidateUpdates() {
+    if (!duplicateResult) return []
+
+    return duplicateResult.unificationCandidates
+      .filter((candidate) => approvedCandidateKeys.includes(getCandidateKey(candidate)))
+      .flatMap((candidate) =>
+        getCandidateOccurrences(candidate).map((occurrence) => ({
+          filename: occurrence.filename,
+          column: occurrence.column,
+          rowIndex: occurrence.rowIndex,
+          value: candidate.canonicalTag,
+          originalValue: occurrence.value,
+        })),
+      ) satisfies CsvCellUpdate[]
+  }
+
+  async function handleSaveChanges() {
+    const updates = toolMode === 'categorizer' ? buildApprovedCategoryUpdates() : buildApprovedCandidateUpdates()
+
+    if (updates.length === 0) return
+
+    setSaveState('loading')
+    setSaveMessage('')
+
+    try {
+      const result = await saveMergeChanges({ updates })
+      setSaveMessage(`Saved ${result.savedUpdateCount} update${result.savedUpdateCount === 1 ? '' : 's'} to CSV.`)
+      setSaveState('idle')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not save changes.')
+      setSaveState('error')
+    }
   }
 
   async function handleFindDuplicates() {
@@ -266,6 +427,8 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const activeSelectionCount = toolMode === 'categorizer' ? categorizerColumns.length : selectedColumns.length
   const selectedCategoryColumn = categorizerColumns[0]
   const selectedTargetColumn = categorizerColumns[1]
+  const activeFile = mergeResult?.files.find((file) => file.filename === activeFilename) ?? mergeResult?.files[0]
+  const approvedChangeCount = toolMode === 'categorizer' ? buildApprovedCategoryUpdates().length : buildApprovedCandidateUpdates().length
 
   return (
     <section className="csv-preview">
@@ -280,9 +443,11 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
       </div>
 
       {mergeState === 'loading' && <p className="muted">Loading sheet previews...</p>}
-      {(mergeState === 'error' || duplicateState === 'error' || categorizeState === 'error') && (
+      {(mergeState === 'error' || duplicateState === 'error' || categorizeState === 'error' || saveState === 'error') && (
         <p className="status error">{errorMessage}</p>
       )}
+
+      {saveMessage && <p className="status success">{saveMessage}</p>}
 
       {mergeResult && mergeState !== 'loading' && (
         <>
@@ -343,16 +508,28 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
             </div>
           )}
 
-          <div className="sheet-preview-grid">
-            {mergeResult.files.map((file) => {
-              const visibleColumns = file.columns
+          <div className="merge-workbench">
+            <div className="sheet-tabs-panel">
+              <div className="sheet-tabs" aria-label="CSV sheets">
+                {mergeResult.files.map((file) => (
+                  <button
+                    className={file.filename === activeFile?.filename ? 'sheet-tab active' : 'sheet-tab'}
+                    key={file.filename}
+                    type="button"
+                    onClick={() => setActiveFilename(file.filename)}
+                  >
+                    <span>{file.filename}</span>
+                    <small>{file.row_count} rows</small>
+                  </button>
+                ))}
+              </div>
 
-              return (
-                <section className="sheet-preview" key={file.filename}>
+              {activeFile && (
+                <section className="sheet-preview" key={activeFile.filename}>
                   <div className="sheet-preview-heading">
-                    <h3>{file.filename}</h3>
+                    <h3>{activeFile.filename}</h3>
                     <span className="muted">
-                      {file.row_count} rows, {file.columns.length} columns
+                      {activeFile.row_count} rows, {activeFile.columns.length} columns
                     </span>
                   </div>
 
@@ -360,17 +537,17 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                     <table>
                       <thead>
                         <tr>
-                          {visibleColumns.map((column) => {
-                            const isSelected = toolMode === 'unifier' && isColumnSelected(file, column)
-                            const isHovered = isColumnHovered(file, column)
-                            const categorizerRole = toolMode === 'categorizer' ? getCategorizerRole(file, column) : ''
+                          {activeFile.columns.map((column) => {
+                            const isSelected = toolMode === 'unifier' && isColumnSelected(activeFile, column)
+                            const isHovered = isColumnHovered(activeFile, column)
+                            const categorizerRole = toolMode === 'categorizer' ? getCategorizerRole(activeFile, column) : ''
 
                             return (
                               <th
                                 className={getColumnClassName(isHovered, isSelected, false, categorizerRole)}
                                 key={column}
                                 onMouseEnter={() =>
-                                  setHoveredColumn({ filename: file.filename, column })
+                                  setHoveredColumn({ filename: activeFile.filename, column })
                                 }
                                 onMouseLeave={() => setHoveredColumn(null)}
                               >
@@ -381,7 +558,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                                       : 'column-select'
                                   }
                                   type="button"
-                                  onClick={() => toggleColumn(file, column)}
+                                  onClick={() => toggleColumn(activeFile, column)}
                                 >
                                   {column}
                                 </button>
@@ -391,14 +568,14 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                         </tr>
                       </thead>
                       <tbody>
-                        {file.rows.map((row, rowIndex) => (
-                          <tr key={`${file.filename}-${rowIndex}`}>
-                            {visibleColumns.map((column) => {
-                              const isSelected = toolMode === 'unifier' && isColumnSelected(file, column)
-                              const isHovered = isColumnHovered(file, column)
-                              const isFocused = isCellFocused(file, column, rowIndex)
-                              const categorizerRole = toolMode === 'categorizer' ? getCategorizerRole(file, column) : ''
-                              const cellKey = getCellKey(file.filename, column, rowIndex)
+                        {activeFile.rows.map((row, rowIndex) => (
+                          <tr key={`${activeFile.filename}-${rowIndex}`}>
+                            {activeFile.columns.map((column) => {
+                              const isSelected = toolMode === 'unifier' && isColumnSelected(activeFile, column)
+                              const isHovered = isColumnHovered(activeFile, column)
+                              const isFocused = isCellFocused(activeFile, column, rowIndex)
+                              const categorizerRole = toolMode === 'categorizer' ? getCategorizerRole(activeFile, column) : ''
+                              const cellKey = getCellKey(activeFile.filename, column, rowIndex)
 
                               return (
                                 <td
@@ -408,7 +585,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                                     cellRefs.current[cellKey] = element
                                   }}
                                   onMouseEnter={() =>
-                                    setHoveredColumn({ filename: file.filename, column })
+                                    setHoveredColumn({ filename: activeFile.filename, column })
                                   }
                                   onMouseLeave={() => setHoveredColumn(null)}
                                 >
@@ -422,9 +599,22 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                     </table>
                   </div>
                 </section>
-              )
-            })}
-          </div>
+              )}
+            </div>
+
+            <aside className="suggestions-sidebar">
+              <div className="suggestions-sidebar-heading">
+                <h3>{toolMode === 'categorizer' ? 'Category suggestions' : 'Unification suggestions'}</h3>
+                <p className="muted">Review results while keeping the full CSV in view.</p>
+                <button
+                  className="primary-button save-changes-button"
+                  type="button"
+                  disabled={approvedChangeCount === 0 || saveState === 'loading'}
+                  onClick={handleSaveChanges}
+                >
+                  {saveState === 'loading' ? 'Saving...' : `Save ${approvedChangeCount} change${approvedChangeCount === 1 ? '' : 's'}`}
+                </button>
+              </div>
 
           {duplicateResult && toolMode === 'unifier' && (
             <section className="duplicate-results">
@@ -445,22 +635,46 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
 
               {duplicateResult.unificationCandidates.map((candidate) => {
                 const occurrences = getCandidateOccurrences(candidate)
+                const candidateKey = getCandidateKey(candidate)
+                const isApproved = approvedCandidateKeys.includes(candidateKey)
+                const isDismissed = dismissedCandidateKeys.includes(candidateKey)
 
                 return (
-                  <article key={`${candidate.canonicalTag}-${candidate.values.join('|')}`}>
+                  <article
+                    className={[isApproved ? 'approved-suggestion' : '', isDismissed ? 'dismissed-suggestion' : '']
+                      .filter(Boolean)
+                      .join(' ')}
+                    key={candidateKey}
+                  >
                     <div className="duplicate-result-body">
                       <div className="candidate-heading-row">
                         <div>
                           <strong>{candidate.canonicalTag}</strong>
                           <p className="muted">{candidate.values.join(', ')}</p>
                         </div>
-                        <button
-                          className="secondary-button compact-button"
-                          type="button"
-                          onClick={() => focusOccurrences(occurrences)}
-                        >
-                          Focus matches
-                        </button>
+                        <div className="suggestion-actions">
+                          <button
+                            className="secondary-button compact-button"
+                            type="button"
+                            onClick={() => focusOccurrences(occurrences)}
+                          >
+                            Focus
+                          </button>
+                          <button
+                            className="approve-button"
+                            type="button"
+                            onClick={() => toggleCandidateApproval(candidate)}
+                          >
+                            {isApproved ? 'Approved' : 'Approve'}
+                          </button>
+                          <button
+                            className="dismiss-button"
+                            type="button"
+                            onClick={() => toggleCandidateDismissal(candidate)}
+                          >
+                            {isDismissed ? 'Dismissed' : 'Dismiss'}
+                          </button>
+                        </div>
                       </div>
 
                       <div className="candidate-counts" aria-label="Match counts">
@@ -473,7 +687,11 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                         <p className="muted">Offline LLM review is not configured yet.</p>
                       )}
 
-                      {renderOccurrencePreview(occurrences)}
+                      <div className="method-sections">
+                        {renderMethodOccurrences(candidate, 'exact', 'Exact', candidate.exactOccurrences)}
+                        {renderMethodOccurrences(candidate, 'fuzzy', 'Fuzzy', candidate.fuzzyOccurrences)}
+                        {renderMethodOccurrences(candidate, 'llm', 'LLM', candidate.llmOccurrences)}
+                      </div>
                     </div>
                     <span>
                       {candidate.totalMatchCount} match{candidate.totalMatchCount === 1 ? '' : 'es'}
@@ -497,8 +715,33 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                 <span>{categorizeResult.summary.llmStatus}</span>
               </div>
 
-              {categorizeResult.suggestions.map((suggestion) => (
-                <article key={`${suggestion.filename}-${suggestion.rowIndex}`}>
+              {categorizeResult.questions.length > 0 && (
+                <div className="question-panel">
+                  <strong>Questions for categorization</strong>
+                  <ul>
+                    {categorizeResult.questions.map((question) => (
+                      <li key={question}>{question}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {categorizeResult.suggestions.length === 0 && (
+                <p className="muted">No LLM suggestions returned yet.</p>
+              )}
+
+              {categorizeResult.suggestions.map((suggestion) => {
+                const suggestionKey = getSuggestionKey(suggestion)
+                const isApproved = approvedSuggestionKeys.includes(suggestionKey)
+                const isDismissed = dismissedSuggestionKeys.includes(suggestionKey)
+
+                return (
+                <article
+                  className={[isApproved ? 'approved-suggestion' : '', isDismissed ? 'dismissed-suggestion' : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                  key={`${suggestion.filename}-${suggestion.rowIndex}`}
+                >
                   <div className="duplicate-result-body">
                     <div className="candidate-heading-row">
                       <div>
@@ -507,13 +750,29 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                           Row {suggestion.rowIndex + 1}: {suggestion.targetValue || 'blank target'}
                         </p>
                       </div>
-                      <button
-                        className="secondary-button compact-button"
-                        type="button"
-                        onClick={() => focusSuggestion(suggestion)}
-                      >
-                        Focus row
-                      </button>
+                      <div className="suggestion-actions">
+                        <button
+                          className="secondary-button compact-button"
+                          type="button"
+                          onClick={() => focusSuggestion(suggestion)}
+                        >
+                          Focus
+                        </button>
+                        <button
+                          className="approve-button"
+                          type="button"
+                          onClick={() => toggleSuggestionApproval(suggestion)}
+                        >
+                          {isApproved ? 'Approved' : 'Approve'}
+                        </button>
+                        <button
+                          className="dismiss-button"
+                          type="button"
+                          onClick={() => toggleSuggestionDismissal(suggestion)}
+                        >
+                          {isDismissed ? 'Dismissed' : 'Dismiss'}
+                        </button>
+                      </div>
                     </div>
                     <p className="muted">{suggestion.reason}</p>
                     {Object.keys(suggestion.context).length > 0 && (
@@ -528,9 +787,19 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
                   </div>
                   <span>{Math.round(suggestion.confidence * 100)}% {suggestion.method}</span>
                 </article>
-              ))}
+                )
+              })}
             </section>
           )}
+
+              {!duplicateResult && !categorizeResult && (
+                <div className="empty-suggestions-panel">
+                  <strong>No suggestions yet</strong>
+                  <p className="muted">Run the active tool to review matches here.</p>
+                </div>
+              )}
+            </aside>
+          </div>
         </>
       )}
     </section>
