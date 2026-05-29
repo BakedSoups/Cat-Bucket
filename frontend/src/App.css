@@ -433,6 +433,61 @@ tbody tr:last-child td {
   margin-bottom: 16px;
 }
 
+.tool-switcher {
+  border: 1px solid #cfd7e3;
+  border-radius: 8px;
+  display: flex;
+  overflow: hidden;
+}
+
+.tool-tab {
+  background: #ffffff;
+  border: 0;
+  color: #475467;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.tool-tab + .tool-tab {
+  border-left: 1px solid #cfd7e3;
+}
+
+.tool-tab.active {
+  background: #edf2f7;
+  color: #111827;
+}
+
+.categorizer-selection-strip {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.categorizer-selection-strip span {
+  background: #edf2f7;
+  border-radius: 999px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 7px 10px;
+}
+
+.categorizer-selection-strip .category-source-chip {
+  background: #e8f1ff;
+  color: #0b4fb3;
+}
+
+.categorizer-selection-strip .category-target-chip {
+  background: #fff0f0;
+  color: #b42318;
+}
+
 .sheet-preview-grid {
   display: grid;
   gap: 16px;
@@ -485,18 +540,39 @@ tbody tr:last-child td {
   color: #533f04;
 }
 
+.category-source-cell {
+  background: #e8f1ff;
+  color: #0b4fb3;
+}
+
+.category-target-cell {
+  background: #fff0f0;
+  color: #b42318;
+}
+
+.category-context-cell {
+  background: #f3f8f5;
+  color: #24543a;
+}
+
 .hovered-column.selected-column-cell {
   background: #c7e2ff;
 }
 
 .hovered-column.focused-match-cell,
-.selected-column-cell.focused-match-cell {
+.selected-column-cell.focused-match-cell,
+.category-source-cell.focused-match-cell,
+.category-target-cell.focused-match-cell,
+.category-context-cell.focused-match-cell {
   background: #ffe8a3;
 }
 
 .hovered-column .column-select,
-.selected-column-cell .column-select {
-  color: #0b66d8;
+.selected-column-cell .column-select,
+.category-source-cell .column-select,
+.category-target-cell .column-select,
+.category-context-cell .column-select {
+  color: inherit;
 }
 
 .column-select {
@@ -645,6 +721,24 @@ tbody tr:last-child td {
   padding: 6px 10px;
 }
 
+.suggestion-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.suggestion-context span {
+  background: #f8fafc;
+  border: 1px solid #dde2ea;
+  border-radius: 999px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 6px 10px;
+}
+
 .duplicate-results article > span {
   color: #667085;
   flex: 0 0 auto;
@@ -685,6 +779,7 @@ tbody tr:last-child td {
   }
 
   .merge-toolbar,
+  .tool-switcher,
   .sheet-preview-heading,
   .duplicate-results-heading,
   .candidate-heading-row,

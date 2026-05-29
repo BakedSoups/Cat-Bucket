@@ -105,3 +105,35 @@ export type DuplicateColumnResponse = {
   }
 }
 
+
+export type CategorizeRequestPayload = {
+  categoryColumn: SelectedCsvColumn
+  targetColumn: SelectedCsvColumn
+  contextColumns: SelectedCsvColumn[]
+}
+
+export type CategorySuggestion = {
+  filename: string
+  rowIndex: number
+  targetValue: string
+  context: Record<string, string>
+  suggestedCategory: string
+  confidence: number
+  reason: string
+  method: string
+}
+
+export type CategorizeResponse = {
+  categoryColumn: SelectedCsvColumn
+  targetColumn: SelectedCsvColumn
+  contextColumns: SelectedCsvColumn[]
+  categories: string[]
+  suggestions: CategorySuggestion[]
+  summary: {
+    categoryCount: number
+    rowCount: number
+    suggestionCount: number
+    llmStatus: string
+    ollamaModel: string
+  }
+}

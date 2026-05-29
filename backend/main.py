@@ -1,7 +1,10 @@
 import csv
+import json
+import os
 import re
 from difflib import SequenceMatcher
 from io import StringIO
+from urllib import error, request
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -27,6 +30,10 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 FUZZY_TAG_LIMIT = 5
 FUZZY_TAG_THRESHOLD = 0.82
 OFFLINE_LLM_STATUS = "offline_model_not_configured"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+CATEGORY_SAMPLE_LIMIT = 80
+CATEGORIZATION_ROW_LIMIT = 50
 
 
 # Request body for POST /api/merge/csv.
@@ -62,6 +69,12 @@ class SelectedColumn(BaseModel):
 # }
 class DuplicateColumnsRequest(BaseModel):
     columns: list[SelectedColumn]
+
+
+class CategorizeRequest(BaseModel):
+    categoryColumn: SelectedColumn
+    targetColumn: SelectedColumn
+    contextColumns: list[SelectedColumn] = []
 
 
 def parse_csv(raw_content: bytes) -> tuple[list[str], list[dict[str, str]]]:
@@ -124,6 +137,10 @@ def split_tag_values(value: str) -> list[str]:
     return [tag.strip() for tag in re.split(r"[,;|\n]+", value) if tag.strip()]
 
 
+def get_source_key(occurrence: dict[str, object]) -> str:
+    return f'{occurrence["filename"]}::{occurrence["column"]}'
+
+
 def collect_tag_occurrences(
     selected_column_values: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -151,6 +168,7 @@ def collect_tag_occurrences(
                     {
                         "filename": filename,
                         "column": column,
+                        "sourceKey": f"{filename}::{column}",
                         "rowIndex": row_index,
                         "value": tag,
                         "normalized": normalized,
@@ -162,6 +180,7 @@ def collect_tag_occurrences(
 
 def build_exact_duplicate_tag_groups(
     occurrences: list[dict[str, object]],
+    require_cross_source: bool,
 ) -> list[dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = {}
 
@@ -171,7 +190,12 @@ def build_exact_duplicate_tag_groups(
     duplicate_groups = []
 
     for normalized, group_occurrences in grouped.items():
+        source_keys = {get_source_key(occurrence) for occurrence in group_occurrences}
+
         if len(group_occurrences) < 2:
+            continue
+
+        if require_cross_source and len(source_keys) < 2:
             continue
 
         display_values = sorted({str(occurrence["value"]) for occurrence in group_occurrences})
@@ -202,10 +226,12 @@ def build_exact_duplicate_tag_groups(
 def build_fuzzy_tag_groups(
     occurrences: list[dict[str, object]],
     exact_duplicate_groups: list[dict[str, object]],
+    require_cross_source: bool,
 ) -> list[dict[str, object]]:
     exact_normalized_tags = {str(group["normalizedTag"]) for group in exact_duplicate_groups}
     occurrences_by_tag: dict[str, list[dict[str, object]]] = {}
     display_by_tag: dict[str, str] = {}
+    source_keys_by_tag: dict[str, set[str]] = {}
 
     for occurrence in occurrences:
         normalized = str(occurrence["normalized"])
@@ -215,12 +241,18 @@ def build_fuzzy_tag_groups(
 
         occurrences_by_tag.setdefault(normalized, []).append(occurrence)
         display_by_tag.setdefault(normalized, str(occurrence["value"]))
+        source_keys_by_tag.setdefault(normalized, set()).add(get_source_key(occurrence))
 
     tags = sorted(occurrences_by_tag)
     fuzzy_pairs = []
 
     for index, left_tag in enumerate(tags):
         for right_tag in tags[index + 1 :]:
+            combined_source_keys = source_keys_by_tag[left_tag] | source_keys_by_tag[right_tag]
+
+            if require_cross_source and len(combined_source_keys) < 2:
+                continue
+
             score = SequenceMatcher(None, left_tag, right_tag).ratio()
 
             if score >= FUZZY_TAG_THRESHOLD:
@@ -260,6 +292,197 @@ def build_fuzzy_tag_groups(
         )
 
     return fuzzy_groups
+
+
+def get_row_value(filename: str, column: str, row_index: int) -> str:
+    upload_path = get_upload_path(filename)
+    columns, rows = parse_csv(upload_path.read_bytes())
+
+    if column not in columns or row_index >= len(rows):
+        return ""
+
+    return rows[row_index].get(column, "")
+
+
+def unique_non_empty_values(values: list[str]) -> list[str]:
+    seen = set()
+    unique_values = []
+
+    for value in values:
+        cleaned = value.strip()
+        normalized = normalize_tag(cleaned)
+
+        if not cleaned or normalized in seen:
+            continue
+
+        seen.add(normalized)
+        unique_values.append(cleaned)
+
+    return unique_values
+
+
+def build_categorization_rows(
+    target_column: dict[str, object],
+    context_columns: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    target_values = target_column["values"]
+
+    if not isinstance(target_values, list):
+        return []
+
+    rows = []
+
+    for row_index, target_value in enumerate(target_values):
+        context = {}
+
+        for context_column in context_columns:
+            if context_column["filename"] != target_column["filename"]:
+                continue
+
+            context_values = context_column["values"]
+
+            if not isinstance(context_values, list) or row_index >= len(context_values):
+                continue
+
+            context[str(context_column["column"])] = str(context_values[row_index] or "")
+
+        target_text = str(target_value or "")
+
+        if not target_text.strip() and not any(value.strip() for value in context.values()):
+            continue
+
+        rows.append(
+            {
+                "filename": target_column["filename"],
+                "rowIndex": row_index,
+                "targetValue": target_text,
+                "context": context,
+            }
+        )
+
+        if len(rows) >= CATEGORIZATION_ROW_LIMIT:
+            break
+
+    return rows
+
+
+def heuristic_category_for_row(categories: list[str], row: dict[str, object]) -> tuple[str, float, str]:
+    haystack_parts = [str(row["targetValue"])]
+    context = row["context"]
+
+    if isinstance(context, dict):
+        haystack_parts.extend(str(value) for value in context.values())
+
+    haystack = normalize_tag(" ".join(haystack_parts))
+    best_category = categories[0] if categories else ""
+    best_score = 0.0
+
+    for category in categories:
+        category_tokens = set(normalize_tag(category).split())
+
+        if not category_tokens:
+            continue
+
+        score = sum(1 for token in category_tokens if token in haystack) / len(category_tokens)
+
+        if score > best_score:
+            best_score = score
+            best_category = category
+
+    if best_score > 0:
+        return best_category, min(0.55 + best_score * 0.35, 0.9), "Keyword overlap fallback."
+
+    return best_category, 0.25, "Local LLM unavailable; defaulted to the first available category."
+
+
+def build_categorization_prompt(categories: list[str], rows: list[dict[str, object]]) -> str:
+    payload = {
+        "categories": categories[:CATEGORY_SAMPLE_LIMIT],
+        "rows": rows,
+        "instructions": (
+            "For each row, choose exactly one category from categories. "
+            "Return only JSON in this shape: "
+            "{\"suggestions\":[{\"rowIndex\":0,\"suggestedCategory\":\"...\","
+            "\"confidence\":0.0,\"reason\":\"short reason\"}]}"
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=True)
+
+
+def call_ollama_categorizer(categories: list[str], rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], str]:
+    body = json.dumps(
+        {
+            "model": OLLAMA_MODEL,
+            "prompt": build_categorization_prompt(categories, rows),
+            "stream": False,
+            "format": "json",
+        }
+    ).encode("utf-8")
+    ollama_request = request.Request(
+        f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(ollama_request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, error.URLError, json.JSONDecodeError):
+        return [], "offline_model_unavailable"
+
+    try:
+        parsed_response = json.loads(str(payload.get("response", "{}")))
+    except json.JSONDecodeError:
+        return [], "offline_model_invalid_response"
+
+    suggestions = parsed_response.get("suggestions")
+
+    if not isinstance(suggestions, list):
+        return [], "offline_model_invalid_response"
+
+    return suggestions, "ready"
+
+
+def build_category_suggestions(
+    categories: list[str],
+    rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], str]:
+    llm_suggestions, llm_status = call_ollama_categorizer(categories, rows)
+    suggestions_by_row = {
+        int(suggestion["rowIndex"]): suggestion
+        for suggestion in llm_suggestions
+        if isinstance(suggestion, dict) and "rowIndex" in suggestion
+    }
+    suggestions = []
+
+    for row in rows:
+        row_index = int(row["rowIndex"])
+        llm_suggestion = suggestions_by_row.get(row_index)
+
+        if llm_suggestion and str(llm_suggestion.get("suggestedCategory", "")) in categories:
+            suggested_category = str(llm_suggestion["suggestedCategory"])
+            confidence = float(llm_suggestion.get("confidence", 0.5))
+            reason = str(llm_suggestion.get("reason", "Local LLM suggestion."))
+            method = "offline_llm"
+        else:
+            suggested_category, confidence, reason = heuristic_category_for_row(categories, row)
+            method = "heuristic"
+
+        suggestions.append(
+            {
+                "filename": row["filename"],
+                "rowIndex": row_index,
+                "targetValue": row["targetValue"],
+                "context": row["context"],
+                "suggestedCategory": suggested_category,
+                "confidence": round(max(0, min(confidence, 1)), 2),
+                "reason": reason,
+                "method": method,
+            }
+        )
+
+    return suggestions, llm_status
 
 
 def build_unification_candidates(
@@ -413,9 +636,17 @@ def find_duplicate_columns(request: DuplicateColumnsRequest) -> dict[str, object
         selected_column_values.append(column_data)
 
     print("Selected column values:", selected_column_values, flush=True)
+    require_cross_source = len(request.columns) > 1
     tag_occurrences = collect_tag_occurrences(selected_column_values)
-    duplicate_tag_groups = build_exact_duplicate_tag_groups(tag_occurrences)
-    fuzzy_tag_groups = build_fuzzy_tag_groups(tag_occurrences, duplicate_tag_groups)
+    duplicate_tag_groups = build_exact_duplicate_tag_groups(
+        tag_occurrences,
+        require_cross_source,
+    )
+    fuzzy_tag_groups = build_fuzzy_tag_groups(
+        tag_occurrences,
+        duplicate_tag_groups,
+        require_cross_source,
+    )
     fuzzy_preview_groups = fuzzy_tag_groups[:FUZZY_TAG_LIMIT]
     unification_candidates = build_unification_candidates(
         duplicate_tag_groups,
@@ -442,3 +673,44 @@ def find_duplicate_columns(request: DuplicateColumnsRequest) -> dict[str, object
         },
     }
 
+
+
+@app.post("/api/merge/categorize")
+def categorize_rows(request_body: CategorizeRequest) -> dict[str, object]:
+    category_column = read_selected_column_values(request_body.categoryColumn)
+    target_column = read_selected_column_values(request_body.targetColumn)
+    context_columns = [
+        read_selected_column_values(context_column)
+        for context_column in request_body.contextColumns
+    ]
+    category_values = category_column["values"]
+
+    if not isinstance(category_values, list):
+        raise HTTPException(status_code=400, detail="Category column could not be read.")
+
+    categories = unique_non_empty_values([str(value or "") for value in category_values])
+
+    if not categories:
+        raise HTTPException(status_code=400, detail="Category column has no categories.")
+
+    rows = build_categorization_rows(target_column, context_columns)
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="No rows were available to categorize.")
+
+    suggestions, llm_status = build_category_suggestions(categories, rows)
+
+    return {
+        "categoryColumn": category_column,
+        "targetColumn": target_column,
+        "contextColumns": context_columns,
+        "categories": categories,
+        "suggestions": suggestions,
+        "summary": {
+            "categoryCount": len(categories),
+            "rowCount": len(rows),
+            "suggestionCount": len(suggestions),
+            "llmStatus": llm_status,
+            "ollamaModel": OLLAMA_MODEL,
+        },
+    }
