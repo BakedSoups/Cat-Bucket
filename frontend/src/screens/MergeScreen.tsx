@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { categorizeRows, findDuplicateColumns, mergeCsvUploads, saveMergeChanges } from '../api/merge'
+import { autoCategorizeRows, categorizeRows, findDuplicateColumns, mergeCsvUploads, saveMergeChanges } from '../api/merge'
 import type {
   CategorizeResponse,
   CategorySuggestion,
@@ -37,6 +37,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   const [categorizeResult, setCategorizeResult] = useState<CategorizeResponse | null>(null)
   const [duplicateState, setDuplicateState] = useState<LoadState>('idle')
   const [categorizeState, setCategorizeState] = useState<LoadState>('idle')
+  const [autoCategorizeState, setAutoCategorizeState] = useState<LoadState>('idle')
   const [saveState, setSaveState] = useState<LoadState>('idle')
   const [saveMessage, setSaveMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
@@ -57,9 +58,9 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
       setCategorizerColumns([])
       setDuplicateResult(null)
       setCategorizeResult(null)
+      setAutoCategorizeState('idle')
       setHoveredColumn(null)
       setFocusedCellKeys([])
-    setSaveMessage('')
       setSaveMessage('')
       setApprovedSuggestionKeys([])
       setDismissedSuggestionKeys([])
@@ -403,6 +404,39 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
     }
   }
 
+  function selectedColumnFromResponse(column: SelectedCsvColumn | null | undefined) {
+    return column ? { filename: column.filename, column: column.column, values: column.values } : null
+  }
+
+  async function handleAutoCategorizeRows() {
+    if (!mergeResult) return
+
+    setAutoCategorizeState('loading')
+    setErrorMessage('')
+    setFocusedCellKeys([])
+
+    try {
+      const data = await autoCategorizeRows({ filenames: mergeResult.selected_filenames })
+      const nextColumns = [
+        selectedColumnFromResponse(data.categoryColumn),
+        selectedColumnFromResponse(data.targetColumn),
+        ...data.contextColumns.map(selectedColumnFromResponse),
+      ].filter((column): column is SelectedCsvColumn => Boolean(column))
+
+      setCategorizerColumns(nextColumns)
+      setCategorizeResult(data)
+
+      if (data.targetColumn?.filename) {
+        setActiveFilename(data.targetColumn.filename)
+      }
+
+      setAutoCategorizeState('idle')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not auto categorize rows.')
+      setAutoCategorizeState('error')
+    }
+  }
+
   async function handleCategorizeRows() {
     if (categorizerColumns.length < 2) return
 
@@ -443,7 +477,7 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
       </div>
 
       {mergeState === 'loading' && <p className="muted">Loading sheet previews...</p>}
-      {(mergeState === 'error' || duplicateState === 'error' || categorizeState === 'error' || saveState === 'error') && (
+      {(mergeState === 'error' || duplicateState === 'error' || categorizeState === 'error' || autoCategorizeState === 'error' || saveState === 'error') && (
         <p className="status error">{errorMessage}</p>
       )}
 
@@ -470,14 +504,24 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
             </div>
 
             {toolMode === 'categorizer' ? (
-              <button
-                className="primary-button"
-                type="button"
-                disabled={categorizerColumns.length < 2 || categorizeState === 'loading'}
-                onClick={handleCategorizeRows}
-              >
-                {categorizeState === 'loading' ? 'Categorizing...' : 'Suggest categories'}
-              </button>
+              <div className="toolbar-button-group">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={autoCategorizeState === 'loading' || categorizeState === 'loading'}
+                  onClick={handleAutoCategorizeRows}
+                >
+                  {autoCategorizeState === 'loading' ? 'Auto picking...' : 'Auto categorize'}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={categorizerColumns.length < 2 || categorizeState === 'loading'}
+                  onClick={handleCategorizeRows}
+                >
+                  {categorizeState === 'loading' ? 'Categorizing...' : 'Suggest categories'}
+                </button>
+              </div>
             ) : (
               <button
                 className="primary-button"

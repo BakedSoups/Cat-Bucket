@@ -7,29 +7,27 @@ type AnalysisScreenProps = {
 }
 
 export function AnalysisScreen({ uploads }: AnalysisScreenProps) {
-  const [selectedFilename, setSelectedFilename] = useState(uploads[0]?.filename ?? '')
+  const [selectedFilename, setSelectedFilename] = useState('')
   const [selectedColumn, setSelectedColumn] = useState('')
   const [csvDetail, setCsvDetail] = useState<CsvDetail | null>(null)
   const [loadState, setLoadState] = useState<LoadState>('idle')
   const [errorMessage, setErrorMessage] = useState('')
 
   useEffect(() => {
-    if (!selectedFilename && uploads[0]) {
-      setSelectedFilename(uploads[0].filename)
-    }
-  }, [selectedFilename, uploads])
-
-  useEffect(() => {
     async function loadCsv() {
-      if (!selectedFilename) return
+      if (!selectedFilename) {
+        setCsvDetail(null)
+        setSelectedColumn('')
+        return
+      }
 
       setLoadState('loading')
       setErrorMessage('')
+      setSelectedColumn('')
 
       try {
         const data = await getCsvUpload(selectedFilename)
         setCsvDetail(data)
-        setSelectedColumn((current) => current || data.columns[0] || '')
         setLoadState('idle')
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Could not load CSV.')
@@ -70,42 +68,55 @@ export function AnalysisScreen({ uploads }: AnalysisScreenProps) {
       <div className="panel-heading">
         <div>
           <h2>Column frequency</h2>
-          <p>Build a bar chart from any CSV column.</p>
+          <p>Select a CSV, then choose a column to chart.</p>
         </div>
       </div>
 
-      <div className="analysis-controls">
-        <label>
-          <span>CSV</span>
-          <select value={selectedFilename} onChange={(event) => setSelectedFilename(event.target.value)}>
-            {uploads.map((upload) => (
-              <option key={upload.filename} value={upload.filename}>
-                {upload.filename}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          <span>Column</span>
-          <select value={selectedColumn} onChange={(event) => setSelectedColumn(event.target.value)}>
-            {csvDetail?.columns.map((column) => (
-              <option key={column} value={column}>
-                {column}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="analysis-file-grid">
+        {uploads.map((upload) => (
+          <button
+            className={upload.filename === selectedFilename ? 'analysis-file-card active' : 'analysis-file-card'}
+            key={upload.filename}
+            type="button"
+            onClick={() => setSelectedFilename(upload.filename)}
+          >
+            <strong>{upload.filename}</strong>
+            <span>{upload.rows} rows, {upload.columns.length} columns</span>
+          </button>
+        ))}
       </div>
 
       {loadState === 'loading' && <p className="muted">Loading CSV...</p>}
       {loadState === 'error' && <p className="status error">{errorMessage}</p>}
 
-      {frequencies.length === 0 && loadState !== 'loading' && (
+      {csvDetail && loadState !== 'loading' && (
+        <div className="analysis-column-picker">
+          <strong>Columns</strong>
+          <div>
+            {csvDetail.columns.map((column) => (
+              <button
+                className={column === selectedColumn ? 'active' : ''}
+                key={column}
+                type="button"
+                onClick={() => setSelectedColumn(column)}
+              >
+                {column}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!selectedFilename && <p className="empty-state">Choose a CSV to start analysis.</p>}
+      {selectedFilename && csvDetail && !selectedColumn && (
+        <p className="empty-state">Choose a column to build a frequency chart.</p>
+      )}
+
+      {selectedColumn && frequencies.length === 0 && loadState !== 'loading' && (
         <p className="empty-state">No values found for this column.</p>
       )}
 
-      {frequencies.length > 0 && (
+      {selectedColumn && frequencies.length > 0 && (
         <div className="bar-chart" aria-label="Column frequency bar chart">
           {frequencies.map((item) => (
             <div className="bar-row" key={item.label}>

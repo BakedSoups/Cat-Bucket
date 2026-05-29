@@ -150,3 +150,7 @@ export type CsvCellUpdate = {
 export type SaveMergeChangesPayload = {
   updates: CsvCellUpdate[]
 }
+
+export type AutoCategorizeRequestPayload = {
+  filenames: string[]
+}

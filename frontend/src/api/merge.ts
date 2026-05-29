@@ -1,4 +1,4 @@
-import type { CategorizeRequestPayload, CategorizeResponse, DuplicateColumnResponse, MergeResponse, SaveMergeChangesPayload, SelectedCsvColumn } from '../types'
+import type { AutoCategorizeRequestPayload, CategorizeRequestPayload, CategorizeResponse, DuplicateColumnResponse, MergeResponse, SaveMergeChangesPayload, SelectedCsvColumn } from '../types'
 import { apiBaseUrl } from './uploads'
 
 export async function mergeCsvUploads(filenames: string[]) {
@@ -69,4 +69,22 @@ export async function saveMergeChanges(payload: SaveMergeChangesPayload) {
   }
 
   return (await response.json()) as { savedUpdateCount: number }
+}
+
+
+export async function autoCategorizeRows(payload: AutoCategorizeRequestPayload) {
+  const response = await fetch(`${apiBaseUrl}/api/merge/auto-categorize`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail ?? 'Could not auto categorize rows.')
+  }
+
+  return (await response.json()) as CategorizeResponse & { summary: CategorizeResponse['summary'] & { autoSelected?: boolean } }
 }

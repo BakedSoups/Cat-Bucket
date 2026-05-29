@@ -1046,3 +1046,74 @@ tbody tr:last-child td {
   font-weight: 800;
   text-align: right;
 }
+
+.analysis-file-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-bottom: 18px;
+}
+
+.analysis-file-card {
+  background: #ffffff;
+  border: 1px solid #dde2ea;
+  border-radius: 8px;
+  color: #344054;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  text-align: left;
+}
+
+.analysis-file-card.active,
+.analysis-file-card:hover {
+  border-color: #7a9c87;
+  background: #f3f8f5;
+}
+
+.analysis-file-card strong {
+  color: #111827;
+  overflow-wrap: anywhere;
+}
+
+.analysis-file-card span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.analysis-column-picker {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.analysis-column-picker > strong {
+  color: #344054;
+  font-size: 14px;
+}
+
+.analysis-column-picker > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analysis-column-picker button {
+  background: #edf2f7;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #344054;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 7px 10px;
+}
+
+.analysis-column-picker button.active,
+.analysis-column-picker button:hover {
+  background: #e8f1ff;
+  border-color: #9fc4ff;
+  color: #0b4fb3;
+}

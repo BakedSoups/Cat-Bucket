@@ -77,6 +77,10 @@ class CategorizeRequest(BaseModel):
     contextColumns: list[SelectedColumn] = []
 
 
+class AutoCategorizeRequest(BaseModel):
+    filenames: list[str]
+
+
 class CsvCellUpdate(BaseModel):
     filename: str
     column: str
@@ -401,6 +405,96 @@ def build_categorization_rows(
     return rows
 
 
+
+def build_column_reference(filename: str, columns: list[str], rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    references = []
+
+    for column in columns:
+        samples = []
+
+        for row in rows[:8]:
+            value = row.get(column, "").strip()
+            if value and value not in samples:
+                samples.append(value)
+
+            if len(samples) >= 5:
+                break
+
+        references.append(
+            {
+                "filename": filename,
+                "column": column,
+                "samples": samples,
+                "nonEmptyCount": sum(1 for row in rows if row.get(column, "").strip()),
+                "uniqueSampleCount": len({row.get(column, "").strip() for row in rows if row.get(column, "").strip()}),
+            }
+        )
+
+    return references
+
+
+def get_selected_column_from_disk(filename: str, column: str) -> SelectedColumn:
+    upload_path = get_upload_path(filename)
+    columns, rows = parse_csv(upload_path.read_bytes())
+
+    if column not in columns:
+        raise HTTPException(status_code=400, detail=f"Column '{column}' was not found in {upload_path.name}.")
+
+    return SelectedColumn(
+        filename=upload_path.name,
+        column=column,
+        values=[row.get(column, "") for row in rows],
+    )
+
+
+def infer_categorizer_columns_with_llm(references: list[dict[str, object]]) -> tuple[dict[str, object] | None, list[str], str]:
+    prompt = json.dumps(
+        {
+            "columns": references,
+            "instructions": (
+                "Pick columns for categorizing bank/purchase rows. Choose one existing column that contains the allowed category labels, "
+                "one existing column whose rows need categories filled or interpreted, and useful context columns such as description, service, account, amount, purchase type, date. "
+                "Return only JSON with keys categoryColumn, targetColumn, contextColumns, and questions. "
+                "Each column reference must include filename and column."
+            ),
+        },
+        ensure_ascii=True,
+    )
+    body = json.dumps(
+        {
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+        }
+    ).encode("utf-8")
+    ollama_request = request.Request(
+        f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(ollama_request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        parsed_response = json.loads(str(payload.get("response", "{}")))
+    except (OSError, TimeoutError, error.URLError, json.JSONDecodeError):
+        return None, ["The local LLM was not reachable for automatic column selection."], "offline_model_unavailable"
+
+    questions = parsed_response.get("questions", [])
+    if not isinstance(questions, list):
+        questions = []
+
+    return parsed_response, [str(question) for question in questions if str(question).strip()], "ready"
+
+
+def is_known_column(reference_lookup: set[tuple[str, str]], column_ref: object) -> bool:
+    return (
+        isinstance(column_ref, dict)
+        and (str(column_ref.get("filename", "")), str(column_ref.get("column", ""))) in reference_lookup
+    )
+
 def build_categorization_prompt(categories: list[str], rows: list[dict[str, object]]) -> str:
     payload = {
         "categories": categories[:CATEGORY_SAMPLE_LIMIT],
@@ -458,9 +552,9 @@ def build_default_categorization_questions(
 ) -> list[str]:
     context_names = ", ".join(str(column["column"]) for column in context_columns) or "no context columns"
     return [
-        f"What business rule should map {target_column['column']} values into {category_column['column']} categories?",
-        f"When {context_names} conflict, which field should be trusted first?",
-        "Are there categories that should only be used with explicit approval?",
+        f"Which rules should choose one {category_column['column']} category for each row in {target_column['column']}?",
+        f"When using {context_names}, which field should matter most for the category decision?",
+        "Are there categories that should only be applied after explicit user approval?",
     ]
 
 
@@ -776,3 +870,86 @@ def save_merge_changes(request_body: SaveMergeChangesRequest) -> dict[str, objec
         write_csv(upload_path, columns, rows)
 
     return {"savedUpdateCount": saved_updates}
+
+
+@app.post("/api/merge/auto-categorize")
+def auto_categorize_rows(request_body: AutoCategorizeRequest) -> dict[str, object]:
+    references = []
+
+    for filename in request_body.filenames:
+        upload_path = get_upload_path(filename)
+        columns, rows = parse_csv(upload_path.read_bytes())
+        references.extend(build_column_reference(upload_path.name, columns, rows))
+
+    if not references:
+        raise HTTPException(status_code=400, detail="No CSV columns were available for auto categorization.")
+
+    reference_lookup = {
+        (str(reference["filename"]), str(reference["column"]))
+        for reference in references
+    }
+    inferred, inference_questions, inference_status = infer_categorizer_columns_with_llm(references)
+
+    if not inferred:
+        return {
+            "categoryColumn": None,
+            "targetColumn": None,
+            "contextColumns": [],
+            "categories": [],
+            "suggestions": [],
+            "questions": inference_questions,
+            "summary": {
+                "categoryCount": 0,
+                "rowCount": 0,
+                "suggestionCount": 0,
+                "llmStatus": inference_status,
+                "ollamaModel": OLLAMA_MODEL,
+                "autoSelected": False,
+            },
+        }
+
+    category_ref = inferred.get("categoryColumn")
+    target_ref = inferred.get("targetColumn")
+    context_refs = inferred.get("contextColumns", [])
+
+    if not is_known_column(reference_lookup, category_ref) or not is_known_column(reference_lookup, target_ref):
+        return {
+            "categoryColumn": None,
+            "targetColumn": None,
+            "contextColumns": [],
+            "categories": [],
+            "suggestions": [],
+            "questions": inference_questions + ["The local LLM did not identify valid category and target columns."],
+            "summary": {
+                "categoryCount": 0,
+                "rowCount": 0,
+                "suggestionCount": 0,
+                "llmStatus": "auto_column_selection_invalid",
+                "ollamaModel": OLLAMA_MODEL,
+                "autoSelected": False,
+            },
+        }
+
+    valid_context_refs = [
+        context_ref
+        for context_ref in context_refs
+        if is_known_column(reference_lookup, context_ref)
+    ] if isinstance(context_refs, list) else []
+
+    category_column = get_selected_column_from_disk(str(category_ref["filename"]), str(category_ref["column"]))
+    target_column = get_selected_column_from_disk(str(target_ref["filename"]), str(target_ref["column"]))
+    context_columns = [
+        get_selected_column_from_disk(str(context_ref["filename"]), str(context_ref["column"]))
+        for context_ref in valid_context_refs
+    ]
+
+    response = categorize_rows(
+        CategorizeRequest(
+            categoryColumn=category_column,
+            targetColumn=target_column,
+            contextColumns=context_columns,
+        )
+    )
+    response["questions"] = inference_questions + list(response.get("questions", []))
+    response["summary"]["autoSelected"] = True
+    return response
