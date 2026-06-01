@@ -39,29 +39,54 @@ export function AnalysisScreen({ uploads }: AnalysisScreenProps) {
   }, [selectedFilename])
 
   const frequencies = useMemo(() => {
-    if (!csvDetail || !selectedColumn) return []
+    if (!csvDetail || !selectedColumn) {
+      return []
+    }
 
     const counts = new Map<string, number>()
 
     for (const row of csvDetail.rows) {
       const value = row[selectedColumn] ?? ''
-      const tags = value
-        .split(/[,;|\n]+/)
-        .map((tag) => tag.trim())
-        .filter(Boolean)
+      const tags: string[] = []
 
-      for (const tag of tags.length > 0 ? tags : value.trim() ? [value.trim()] : []) {
+      for (const tag of value.split(/[,;|\n]+/)) {
+        const trimmedTag = tag.trim()
+
+        if (trimmedTag) {
+          tags.push(trimmedTag)
+        }
+      }
+
+      const fallbackValue = value.trim()
+      const tagValues = tags.length > 0 ? tags : []
+
+      if (tagValues.length === 0 && fallbackValue) {
+        tagValues.push(fallbackValue)
+      }
+
+      for (const tag of tagValues) {
         counts.set(tag, (counts.get(tag) ?? 0) + 1)
       }
     }
 
-    return [...counts.entries()]
-      .map(([label, count]) => ({ label, count }))
+    const frequencyItems: Array<{ label: string; count: number }> = []
+
+    for (const [label, count] of counts.entries()) {
+      frequencyItems.push({ label, count })
+    }
+
+    return frequencyItems
       .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
       .slice(0, 30)
   }, [csvDetail, selectedColumn])
 
-  const maxCount = Math.max(...frequencies.map((item) => item.count), 1)
+  let maxCount = 1
+
+  for (const item of frequencies) {
+    if (item.count > maxCount) {
+      maxCount = item.count
+    }
+  }
 
   return (
     <section className="csv-preview">

@@ -92,10 +92,16 @@ export function MergeScreen({ filenames, onBack }: MergeScreenProps) {
   }
 
   function getSelectedColumn(file: CsvDetail, column: string) {
+    const values: string[] = []
+
+    for (const row of file.rows) {
+      values.push(row[column] ?? '')
+    }
+
     return {
       filename: file.filename,
       column,
-      values: file.rows.map((row) => row[column] ?? ''),
+      values,
     }
   }
 
